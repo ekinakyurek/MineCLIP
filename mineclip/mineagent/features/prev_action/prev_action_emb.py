@@ -21,5 +21,7 @@ class PrevActionEmb(nn.Module):
 
     def forward(self, x, **kwargs):
         x = U.any_to_torch_tensor(x, device=self._device)
+        if x.ndim > 1 and x.shape[-1] == 1:
+            x = x.squeeze(-1)
         x = self._embed(x)
         return x, None

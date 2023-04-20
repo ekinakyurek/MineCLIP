@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch.nn as nn
 
-from .batch import Batch
+from tianshou.data import Batch
 
 
 class MineAgent(nn.Module):

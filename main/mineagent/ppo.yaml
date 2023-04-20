@@ -1,0 +1,97 @@
+ppo_args:
+  lr: 1e-4
+  lr_decay: true
+  min_lr: 5e-6
+  eps_clip: 0.2
+  max_grad_norm: 10.0
+  dual_clip: null
+  value_clip: 0
+  norm_adv: 1
+  recompute_adv: 0
+  render: 0.0
+  gamma: 0.99
+  epoch: 100
+  step_per_epoch: 100000
+  step_per_collect: 1000
+  repeat_per_collect: 5
+  batch_size: 256
+  hidden_size: 512
+  training_num: 10
+  test_num: 10
+  rew_norm: false
+  vf_coef: 0.5
+  ent_coef: 5e-3
+  gae_lambda: 0.95
+  frames_stack: 1
+  resume_path: null
+  resume_id: null
+  logdir: "logs"
+  seed: 42
+  save_buffer_name: null
+  watch: false
+  task: "minecraft"
+  buffer_size: 100000
+  scale_obs: 1
+  logger: "tensorboard"
+
+feature_net_kwargs:
+  compass:
+    cls: CompassMLP
+    input_dim: 4
+    hidden_dim: 128
+    output_dim: 128
+    hidden_depth: 2
+  gps:
+    cls: GPSMLP
+    hidden_dim: 128
+    output_dim: 128
+    hidden_depth: 2
+  voxels:
+    cls: FlattenedVoxelBlockEncoder
+    embed_dim: 8
+    hidden_dim: 128
+    output_dim: 128
+    hidden_depth: 2
+  biome_id:
+    cls: BiomeIDEmb
+    embed_dim: 8
+  prev_action:
+    cls: PrevActionEmb
+    embed_dim: 8
+  prompt:
+    cls: PromptEmbFeat
+    output_dim: 512
+  img_feats:
+    cls: DummyImgFeat
+    output_dim: 512
+
+feature_fusion:
+  output_dim: 512
+  hidden_depth: 0
+
+actor:
+  hidden_dim: 256
+  hidden_depth: 3
+
+mineclip_kwargs:
+  arch: "vit_base_p16_fz.v2.t2"
+  hidden_dim: 512
+  image_feature_dim: 512
+  mlp_adapter_spec: "v0-2.t0"
+  pool_type: "attn.d2.nh8.glusw"
+  resolution: [160, 256]
+
+wandb_kwargs:
+  wand_project: minecraft_ppo
+
+
+state_shape: null
+action_shape: null
+algo_name: "ppo"
+
+hydra:
+  job:
+    chdir: true
+  run:
+    dir: .
+  output_subdir: null

@@ -34,10 +34,12 @@ class MultiCategoricalActor(nn.Module):
         self._action_dim = action_dim
         self._device = device
 
-    def forward(self, x, state=None, info=None):
-        hidden = None
+    def forward(self, x, **kwargs):
+        del kwargs
         x, _ = self.preprocess(x)
-        return torch.cat([mlp(x) for mlp in self.mlps], dim=1), hidden
+        output = torch.cat([mlp(x) for mlp in self.mlps], dim=1)
+        hidden = None
+        return output, hidden
 
     @property
     def dist_fn(self):

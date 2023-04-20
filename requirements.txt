@@ -7,4 +7,9 @@ dm-tree
 Pillow
 transformers
 kornia
-minedojo @ git+https://github.com/MineDojo/MineDojo
+minedojo
+black
+isort
+pylint
+tianshou=0.4.6.post1
+

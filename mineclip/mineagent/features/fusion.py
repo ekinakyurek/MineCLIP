@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from ..batch import Batch
+from tianshou.data import Batch
 from mineclip.utils import build_mlp, call_once
 
 
@@ -48,7 +48,9 @@ class SimpleFeatureFusion(nn.Module):
         self._check_obs_key_match(x)
         if isinstance(x, Batch):
             x.to_torch(device=self._device)
+
         x = {k: v.forward(x[k], **kwargs)[0] for k, v in self._extractors.items()}
         x = torch.cat([x[k] for k in sorted(x.keys())], dim=-1)
+
         x = self._head(x)
         return x, None

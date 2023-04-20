@@ -5,6 +5,7 @@ from typing import Callable
 import torch
 import torch.nn as nn
 import tree
+import numpy as np
 
 from .file_utils import *
 
@@ -189,3 +190,23 @@ def get_module_device(model):
         first model parameter's device
     """
     return next(model.parameters()).device
+
+
+def any_concat(xs: list, *, dim: int = 0):
+    """
+    Works for both torch Tensor and numpy array
+    """
+
+    def _any_concat_helper(*xs):
+        x = xs[0]
+        if isinstance(x, np.ndarray):
+            return np.concatenate(xs, axis=dim)
+        elif torch.is_tensor(x):
+            return torch.cat(xs, dim=dim)
+        elif isinstance(x, float):
+            # special treatment for float, defaults to float32
+            return np.array(xs, dtype=np.float32)
+        else:
+            return np.array(xs)
+
+    return tree.map_structure(_any_concat_helper, *xs)

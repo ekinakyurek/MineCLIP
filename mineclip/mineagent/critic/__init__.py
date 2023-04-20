@@ -1,0 +1,1 @@
+from .minecritic import MineCritic

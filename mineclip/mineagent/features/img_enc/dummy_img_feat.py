@@ -5,9 +5,10 @@ import torch.nn as nn
 
 
 class DummyImgFeat(nn.Module):
-    def __init__(self, output_dim: int = 512):
+    def __init__(self, output_dim: int = 512, device=None):
         super().__init__()
         self._output_dim = output_dim
+        self.device = device
 
     @property
     def output_dim(self):
