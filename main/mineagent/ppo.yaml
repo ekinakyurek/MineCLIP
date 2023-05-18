@@ -10,10 +10,10 @@ ppo_args:
   recompute_adv: 0
   render: 0.0
   gamma: 0.99
-  epoch: 100
+  epoch: 20
   step_per_epoch: 100000
   step_per_collect: 1000
-  repeat_per_collect: 5
+  repeat_per_collect: 4
   batch_size: 256
   hidden_size: 512
   training_num: 10
@@ -32,6 +32,9 @@ ppo_args:
   task: "minecraft"
   buffer_size: 100000
   scale_obs: 1
+  si_frequency: 100000
+  si_lr: 1e-4
+  si_min_lr: 1e-6
   logger: "tensorboard"
 
 feature_net_kwargs:

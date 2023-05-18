@@ -9,8 +9,12 @@ import minedojo
 import numpy as np
 from tianshou.data import Collector
 from tianshou.data import VectorReplayBuffer, PrioritizedVectorReplayBuffer
-from tianshou.policy import PPOPolicy
-from tianshou.trainer import onpolicy_trainer
+
+# from tianshou.policy import PPOPolicy
+from main.mineagent.ppo_policy import PPOPolicy
+
+# from tianshou.trainer import onpolicy_trainer
+from main.mineagent.on_policy_si import onpolicy_trainer
 from tianshou.utils import TensorboardLogger
 from tianshou.utils import WandbLogger
 from tianshou.utils.net.common import ActorCritic
@@ -21,7 +25,7 @@ from torch.utils.tensorboard import SummaryWriter
 from environments.minecraft import CachedActionWrapper
 from environments.minecraft import FlattenedMotionCamera
 from environments.minecraft import MotionActionWrapper
-from environments.minecraft import MineCLIPEnv
+from environments.minecraft import MineCLIPEnv, SelfBCEnv
 from environments.minecraft import PreprocessedObservation
 from mineclip import MineCritic
 from mineclip import MultiCategoricalActor
@@ -43,23 +47,34 @@ def make_minecraft_envs(cfg, device="cpu"):
         mlp_adapter_spec=mineclip_kwargs.mlp_adapter_spec,
         pool_type=mineclip_kwargs.pool_type,
     )
-    clip_model.load_ckpt("/home/akyurek/git/MineCLIP/mineclip/checkpoints/attn.pth",
-                         strict=True)
+    clip_model.load_ckpt(
+        "/home/akyurek/git/MineCLIP/mineclip/checkpoints/attn.pth", strict=True
+    )
     clip_model.to(device)
     clip_model.device = device
 
-    task_ids = [key for key in minedojo.tasks.ALL_PROGRAMMATIC_TASK_INSTRUCTIONS.keys()
-                if key.startswith("harvest")]
+    # task_ids = list(minedojo.tasks.ALL_PROGRAMMATIC_TASK_INSTRUCTIONS.keys())
+    # task_ids = [key for key in minedojo.tasks.ALL_PROGRAMMATIC_TASK_INSTRUCTIONS.keys() if key.startswith("harvest")]
 
-    rng.shuffle(task_ids)
+    # rng.shuffle(task_ids)
 
-    train_task_ids = task_ids[:20]
-    test_task_ids = task_ids[:20]
+    task_ids_and_instruction = {
+        "harvest_milk_with_cow": "milk a cow",
+        "combat_cow_forest_leather_armors_wooden_sword_shield": "hunt a cow",
+        "harvest_wool_with_shears_and_sheep": "shear a sheep",
+        "combat_sheep_forest_leather_armors_wooden_sword_shield": "hunt a sheep",
+    }
+
+    task_ids_selected = list(task_ids_and_instruction.keys())
+
+    train_task_ids = task_ids_selected
+    test_task_ids = task_ids_selected
 
     def wrapped_env_fn(task_id: str, prompt_info, time_limit: int = 0):
         # init env
         env = minedojo.make(
-            task_id=task_id, image_size=(160, 256), world_seed=123, seed=42
+            task_id=task_id,
+            image_size=(160, 256),
         )
         # get the prompt
         prompt_text = prompt_info["text"]
@@ -76,31 +91,29 @@ def make_minecraft_envs(cfg, device="cpu"):
 
     prompt_info = {}
 
-    for task_id in set(train_task_ids + test_task_ids):
-        instruction = minedojo.tasks.ALL_PROGRAMMATIC_TASK_INSTRUCTIONS[task_id]
-        prompt = instruction[1]
+    for _task_id in set(train_task_ids + test_task_ids):
+        # instruction = minedojo.tasks.ALL_PROGRAMMATIC_TASK_INSTRUCTIONS[_task_id]
+        prompt = task_ids_and_instruction[_task_id]
         with torch.no_grad():
-            prompt_feature = (
-                clip_model.encode_text([prompt]).flatten().cpu().numpy()
-            )
+            prompt_feature = clip_model.encode_text([prompt]).flatten().cpu().numpy()
 
-        prompt_info[task_id] = {"features": prompt_feature, "text": prompt}
+        prompt_info[_task_id] = {"features": prompt_feature, "text": prompt}
 
     def get_env_fn(task_id: str, time_limit: int = 0):
         env_fn = functools.partial(
             wrapped_env_fn,
             task_id=task_id,
             prompt_info=prompt_info[task_id],
-            time_limit=time_limit
+            time_limit=time_limit,
         )
         return env_fn
 
-    train_envs = MineCLIPEnv(
-        [get_env_fn(task_id) for task_id in train_task_ids],
+    train_envs = SelfBCEnv(
+        [get_env_fn(task_id, time_limit=500) for task_id in train_task_ids],
         mineclip_model=clip_model,
         device=clip_model.device,
     )
-    test_envs = MineCLIPEnv(
+    test_envs = SelfBCEnv(
         [get_env_fn(task_id, time_limit=500) for task_id in test_task_ids],
         mineclip_model=clip_model,
         device=clip_model.device,
@@ -152,7 +165,7 @@ def main(cfg):
     )
 
     optim = torch.optim.Adam(
-        ActorCritic(actor, critic).parameters(), lr=cfg.ppo_args.lr, eps=1e-5
+        ActorCritic(actor, critic).parameters(), lr=cfg.ppo_args.lr
     )
 
     lr_scheduler = None
@@ -162,7 +175,9 @@ def main(cfg):
             np.ceil(cfg.ppo_args.step_per_epoch / cfg.ppo_args.step_per_collect)
             * cfg.ppo_args.epoch
         )
-        lr_scheduler = CosineAnnealingLR(optim, max_update_num, eta_min=cfg.ppo_args.min_lr)
+        lr_scheduler = CosineAnnealingLR(
+            optim, max_update_num, eta_min=cfg.ppo_args.min_lr
+        )
 
     policy = PPOPolicy(
         actor,
@@ -202,20 +217,18 @@ def main(cfg):
     train_collector = Collector(policy, train_envs, buffer, exploration_noise=True)
     test_collector = Collector(policy, test_envs, exploration_noise=True)
 
-    # if cfg.ppo_args.si_frequency > -1:
-    #     si_buffer = PrioritizedVectorReplayBuffer(
-    #         total_size=cfg.ppo_args.buffer_size,
-    #         alpha=cfg.ppo_args.si_alpha,
-    #         beta=cfg.ppo_args.si_beta,
-    #         buffer_num=len(train_envs),
-    #         ignore_obs_next=True,
-    #     )
-    #     si_collector = Collector(policy, train_envs, si_buffer)
-    # else:
-    #     si_collector = None
+    if cfg.ppo_args.si_frequency > -1:
+        def get_si_optim(params):
+            return torch.optim.Adam(params, lr=cfg.ppo_args.si_lr)
 
+        def get_si_lrscheduler(optim, max_update_num):
+            return CosineAnnealingLR(
+                optim, max_update_num, eta_min=cfg.ppo_args.si_min_lr
+            )
+    else:
+        get_si_optim = None
+        get_si_lrscheduler = None
 
-    # log
     now = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
     cfg.algo_name = "ppo"
     log_name = os.path.join(
@@ -243,18 +256,14 @@ def main(cfg):
         torch.save(policy.state_dict(), os.path.join(log_path, "policy.pth"))
 
     def stop_fn(mean_rewards):
-        try:
-            if env.spec.reward_threshold:
-                return mean_rewards >= env.spec.reward_threshold
-            else:
-                return False
-        except AttributeError:
-            return False
+        del mean_rewards
+        return False
 
     def save_checkpoint_fn(epoch, env_step, gradient_step):
         # see also: https://pytorch.org/tutorials/beginner/saving_loading_models.html
-        ckpt_path = os.path.join(log_path,
-                                 f"checkpoint_{epoch}_{env_step}_{gradient_step}.pth")
+        ckpt_path = os.path.join(
+            log_path, f"checkpoint_{epoch}_{env_step}_{gradient_step}.pth"
+        )
         torch.save({"model": policy.state_dict()}, ckpt_path)
         return ckpt_path
 
@@ -307,7 +316,8 @@ def main(cfg):
         test_in_train=False,
         resume_from_log=cfg.ppo_args.resume_id is not None,
         save_checkpoint_fn=save_checkpoint_fn,
-        # si_collector=si_collector,
+        get_si_optim=get_si_optim,
+        get_si_lrscheduler=get_si_lrscheduler,
     )
 
     pprint.pprint(result)

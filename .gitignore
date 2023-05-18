@@ -1,5 +1,14 @@
 *.ipynb
 
+transformers/
+MC-Controller/
+MC-Planner/
+MineDojo/
+LAVIS/
+artifacts/
+**/logs/
+**/exps/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

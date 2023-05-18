@@ -7,6 +7,7 @@ from minedojo.sim import spaces as spaces
 from minedojo.sim.wrappers import ARNNWrapper
 import numpy as np
 from tianshou.env.venvs import SubprocVectorEnv
+from tianshou.data import ReplayBuffer, Batch
 from mineclip.utils import any_concat
 
 import torch
@@ -62,8 +63,6 @@ class FlattenedMotionCamera(gym.ActionWrapper):
         Trimmed action to ARNN action
         """
         # print("action: ", action)
-        # print("action space: ", self.action_space)
-        # print("flattened action wrapper action: ", action)
         assert self.action_space.contains(action)
         noop = self.env.action_space.no_op()
 
@@ -190,7 +189,6 @@ class PreprocessedObservation(gym.ObservationWrapper):
         yaw = observation["location_stats"]["yaw"]
         # scalar to 1d array
         biome_id = observation["location_stats"]["biome_id"][None].copy()
-        prev_action = self.env.prev_action[None].copy()
 
         compass = np.concatenate(
             [np.sin(pitch), np.cos(pitch), np.sin(yaw), np.cos(yaw)]
@@ -201,9 +199,9 @@ class PreprocessedObservation(gym.ObservationWrapper):
             "gps": gps,
             "voxels": voxels.reshape(-1).copy(),
             "biome_id": biome_id,
-            "prev_action": prev_action,
+            "prev_action": self.env.prev_action[None].copy(),
             "rgb": rgb,
-            "prompt": self.get_prompt_features(),
+            "prompt": self.env.prompt_features,
         }
 
         return obs
@@ -227,7 +225,7 @@ class MotionActionWrapper(gym.ActionWrapper):
         self.action_space = spaces.MultiDiscrete(new_action_nvec, noop_vec=new_noop_vec)
 
     def action(self, action):
-        self._prev_action = np.int64(action[0])
+        # self._prev_action = np.int64(action[0])
         if action == self._use_action_idx or action == self._attack_action_idx:
             action_idx = 1 if action == self._use_action_idx else 3
             return np.array([self._motion_noop_idx, action_idx, 0, 0])
@@ -239,18 +237,23 @@ class CachedActionWrapper(gym.Wrapper):
     def __init__(self, env, prompt: str, prompt_features: np.ndarray):
         super().__init__(env)
         self.prompt = prompt
-        self.prompt_features = prompt_features
-        self.prev_action = self.env.action_space.no_op()[0]
+        self._prompt_features = prompt_features
+        self._prev_action = self.env.action_space.no_op()[0]
 
-    def get_prompt_features(self):
-        return self.prompt_features
+    @property
+    def prompt_features(self):
+        return self._prompt_features
+
+    @property
+    def prev_action(self):
+        return self._prev_action
 
     def step(self, action):
-        self.env.prev_action = action[0]
+        self._prev_action = action[0]
         return self.env.step(action)
 
     def reset(self):
-        self.prev_action = self.env.action_space.no_op()[0]
+        self._prev_action = self.env.action_space.no_op()[0]
         return self.env.reset()
 
 
@@ -260,7 +263,7 @@ class MineCLIPEnv(SubprocVectorEnv):
         env_fns: List[Callable[[], gym.Env]],
         mineclip_model=None,
         max_img_buffer_len: int = 16,
-        device="cuda",
+        device: str = "cuda",
         **kwargs: Any,
     ) -> None:
         super().__init__(env_fns, **kwargs)
@@ -273,6 +276,8 @@ class MineCLIPEnv(SubprocVectorEnv):
         self.image_feature_buffer = [
             deque(maxlen=max_img_buffer_len) for _ in range(len(env_fns))
         ]
+
+        self.max_img_buffer_len = max_img_buffer_len
 
         obs_space = self.get_env_attr("observation_space")[0]
 
@@ -290,22 +295,31 @@ class MineCLIPEnv(SubprocVectorEnv):
         self.set_env_attr("observation_space", new_space)
 
     @torch.no_grad()
+    def _reset_feature_buffer(self, env_id):
+        pad = torch.zeros(512, device=self.device)
+        buffer = self.image_feature_buffer[env_id]
+        buffer.clear()
+        for _ in range(self.max_img_buffer_len):
+            buffer.append(pad)
+
+
+    @torch.no_grad()
     def _video_reward_fn(
         self, next_image: List[np.ndarray], env_ids: List[int]
     ) -> np.ndarray:
         """Reward function from mineclip."""
         image_tensor = torch.tensor(np.array(next_image), device=self.device)
-        # print("image_tensor.shape", image_tensor.shape)
         image_feats = self.mineclip_model.forward_image_features(image_tensor)
-        # print("image_feats.shape", image_feats.shape)
         video_feats = []
-        for env_id, image_feat in zip(env_ids, image_feats):
-            self.image_feature_buffer[env_id].append(image_feat)
-            current_env_frames = list(self.image_feature_buffer[env_id])
-            # print("single env frame shape", current_env_frames[0].shape)
+
+        for index, env_id in enumerate(env_ids):
+            image_feat = image_feats[index]
+            buffer = self.image_feature_buffer[env_id]
+            buffer.append(image_feat)
+            current_env_frames = list(buffer)
             env_video = torch.stack(current_env_frames)
-            # print("single env video shape", current_env_frames[0].shape)
             video_feats.append(env_video)
+
 
         video_feats = torch.stack(video_feats)
 
@@ -317,7 +331,7 @@ class MineCLIPEnv(SubprocVectorEnv):
 
         text_feats = self.get_env_attr("prompt_features", env_ids)
 
-        text_feats = torch.tensor(text_feats, device=self.device)
+        text_feats = torch.tensor(np.array(text_feats), device=self.device)
 
         # print("text_feats.shape", text_feats.shape)
 
@@ -352,8 +366,12 @@ class MineCLIPEnv(SubprocVectorEnv):
 
         video_reward = self._video_reward_fn(highres_rgbs, ids)
 
-        for index, id in enumerate(ids):
-            obs[index]["img_feats"] = self.image_feature_buffer[id][-1].cpu().numpy()
+        is_successful = self.get_env_attr("is_successful", ids)
+
+        for index, env_id in enumerate(ids):
+            obs[index]["img_feats"] = self.image_feature_buffer[env_id][-1].cpu().numpy()
+            info[index]["native_reward"] = native_reward[index]
+            info[index]["is_successful"] = is_successful[index]
 
         reward = native_reward + video_reward
 
@@ -368,17 +386,91 @@ class MineCLIPEnv(SubprocVectorEnv):
         ids = self._wrap_id(id)
         obs = super().reset(ids)
 
-        for id in ids:
-            self.image_feature_buffer[id].clear()
+        for env_id in ids:
+            self._reset_feature_buffer(env_id)
 
         highres_rgbs = [ob["rgb"] for ob in obs]
 
         self._video_reward_fn(highres_rgbs, ids)
 
-        for index, id in enumerate(ids):
-            obs[index]["img_feats"] = self.image_feature_buffer[id][-1].cpu().numpy()
+        for index, env_id in enumerate(ids):
+            obs[index]["img_feats"] = self.image_feature_buffer[env_id][-1].cpu().numpy()
 
         return obs
+
+class SelfBCEnv(MineCLIPEnv):
+
+    def __init__(self, env_fns: List[Callable[[], gym.Env]], *args, si_frequency: int = 100000, **kwargs):
+        super().__init__(env_fns, *args, **kwargs)
+
+        self.si_buffer = [deque(maxlen=10) for _ in range(len(env_fns))]
+        self.si_counter = 0
+        self.si_frequency = si_frequency
+        self.si_needed = False
+        self.current_buffer = [[] for _ in range(len(env_fns))]
+
+    def step(
+        self, action: np.ndarray, id: Optional[Union[int, List[int], np.ndarray]] = None
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Run one timestep of the batched environment's dynamics."""
+        env_ids = self._wrap_id(id)
+
+        output = super().step(action, env_ids)
+
+        obs, reward, done, info = output
+
+        for index, env_id in enumerate(env_ids):
+            env_buffer = self.current_buffer[env_id]
+            data = Batch(obs_next=obs[index], act=action[index], rew=reward[index])
+            env_buffer.append(data)
+
+            if done[index]:
+                if info[index]["is_successful"]:
+                    print("successful episode will added to si_buffer")
+                    print("env id: ", env_id)
+                    episode = Batch.stack(env_buffer)
+                    obs = episode.obs_next[:-1]
+                    act = episode.act[1:]
+                    rew = episode.rew[1:]
+                    episode = Batch(obs=obs, act=act, rew=rew, info=obs)
+                    self.si_buffer[env_id].append(episode)
+                    self.si_counter += len(env_buffer)
+                    print("si counter: ", self.si_counter)
+                else:
+                    episode = Batch.stack(env_buffer)
+                    obs = episode.obs_next[:-1]
+                    act = episode.act[1:]
+                    rew = episode.rew[1:]
+                    episode = Batch(obs=obs, act=act, rew=rew, info=obs)
+                    mean_reward = rew.mean()
+                    si_rews = [ep.rew.mean() for ep in self.si_buffer[env_id]]
+                    si_mean = np.mean(si_rews) if len(si_rews) > 0 else 0.0
+                    si_std = np.std(si_rews) if len(si_rews) > 0 else 0.0
+                    if mean_reward > si_mean + 2 * si_std:
+                        print("high reward episode will added to si_buffer")
+                        print("env id: ", env_id)
+                        self.si_buffer[env_id].append(episode)
+                        self.si_counter += len(env_buffer)
+                        print("si counter: ", self.si_counter)
+
+                self.current_buffer[env_id] = []
+
+        obs, reward, done, info = output
+        return output
+
+
+    def reset(self, id: Optional[Union[int, List[int], np.ndarray]] = None) -> np.ndarray:
+        env_ids = self._wrap_id(id)
+
+        obs = super().reset(env_ids)
+
+        for index, env_id in enumerate(env_ids):
+            self.current_buffer[env_id] = []
+            noop = self.get_env_attr("action_space")[0].no_op()[0]
+            data = Batch(obs_next=obs[index], act=np.array([noop]), rew=np.array([0.0]))
+            self.current_buffer[env_id].append(data)
+        return obs
+
 
 
 # def transform_action(action):
