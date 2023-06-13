@@ -17,8 +17,8 @@ import pandas as pd
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
-
-import cv2
+from matplotlib import pyplot as plt
+import numpy as np
 
 
 def get_video_info(filname):
@@ -61,7 +61,12 @@ def annotate_video_folder(folder):
 
 class RandomDataset(torch.utils.data.IterableDataset):
     def __init__(
-        self, annotations, frame_transform=None, video_transform=None, clip_len=16
+        self,
+        annotations: pd.DataFrame,
+        frame_transform=None,
+        video_transform=None,
+        clip_len: int = 16,
+        seed: int = 42
     ):
         super(RandomDataset).__init__()
 
@@ -70,11 +75,13 @@ class RandomDataset(torch.utils.data.IterableDataset):
         self.frame_transform = frame_transform
         self.video_transform = video_transform
         self.epoch_size = len(self.annotations)
+        self.seed = seed
+        self.rng = np.random.default_rng(seed)
 
     def __iter__(self):
         for i in range(self.epoch_size):
             # Get random sample
-            sample = self.annotations.sample(1, weights="nbframes", replace=False)
+            sample = self.annotations.sample(1, weights="nbframes", replace=False, random_state=self.rng)
             sample = sample.iloc[0]
             path = "youtube/dgx_videos/" + sample["file"]
             if not os.path.exists(path):
@@ -87,7 +94,7 @@ class RandomDataset(torch.utils.data.IterableDataset):
             vid = VideoReader(path, "video")
             video_frames = []  # video frame buffer
             # Seek and return frames
-            start = random.uniform(0.0, max_seek)
+            start = self.rng.uniform(0.0, max_seek)
             for frame in itertools.islice(vid.seek(start), self.clip_len):
                 data = frame["data"]
                 if self.frame_transform:
@@ -144,9 +151,52 @@ class AutoencoderKLWLoss(nn.Module):
         return self.vae.decode(z).sample
 
 
+
+import matplotlib
+def save_as_grid(fname: str, model: AutoencoderKLWLoss, video: torch.Tensor):
+    # for each digit sample one image randomly
+    reconstructions, _ = model(video)
+    N = reconstructions.shape[0]
+    # save reconstructed image
+    reconstructions = reconstructions.cpu().numpy()
+    reconstructions = ((reconstructions * 0.5 + 0.5) * 255.0).astype("uint8")
+    original = ((video.cpu().numpy() * 0.5 + 0.5) * 255.0).astype("uint8")
+    # set dpi
+    dpi = 150
+    matplotlib.rcParams['figure.dpi'] = dpi
+    figsize = 5 * 512 / dpi, 10 * 256 / dpi
+
+    nrow, ncol = 2, N
+    fig, axes = plt.subplots(nrow, ncol, figsize=figsize)
+
+    for index in range(reconstructions.shape[0]):
+        i = 2*index
+        row, col = i // ncol, i % ncol
+        ax = axes[row, col]
+        ax.imshow(reconstructions[index].transpose(1, 2, 0))
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+        ax.axis('off')
+        ax.set_title(f"R{index}")
+
+    for index in range(original.shape[0]):
+        i = 2*index + 1
+        row, col = i // ncol, i % ncol
+        ax = axes[row, col]
+        ax.imshow(original[index].transpose(1, 2, 0))
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+        ax.axis('off')
+        ax.set_title(f"O{index}")
+
+    fig.tight_layout()
+    fig.subplots_adjust(wspace=0, hspace=0)
+    fig.savefig(fname)
+
+
 def train(
-    model,
-    df,
+    model: AutoencoderKLWLoss,
+    df: pd.DataFrame,
     batch_size: int = 8,
     gaccum: int = 8,
     total_iter: int = 100,
@@ -166,7 +216,7 @@ def train(
     )
     dataloader = DataLoader(dataset, batch_size=batch_size)
     optim = AdamW(model.parameters(), lr=1e-4)
-    scheduler = CosineAnnealingLR(optim, total_iter, eta_min=1e-6)
+    scheduler = CosineAnnealingLR(optim, total_iter, eta_min=1e-5)
     n_iter = 0
     total_loss = 0.0
     n_forward = 0
@@ -192,26 +242,41 @@ def train(
                     print("Iter: ", n_iter, "Loss: ", total_loss / n_forward)
                     model.eval()
                     with torch.no_grad():
-                        reconstructions, posteriors = model(video)
-                        # save reconstructed image
-                        reconstructions = reconstructions.cpu().numpy()
-                        reconstructions = ((reconstructions * 0.5 + 0.5) * 255.0).astype("uint8")
-                        original = ((video.cpu().numpy() * 0.5 + 0.5) * 255.0).astype("uint8")
-                        for i in range(reconstructions.shape[0]):
-                            img = reconstructions[i].transpose(1, 2, 0)
-                            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                            cv2.imwrite(f"youtube/recon_{i}.png", img)
-                            img = original[i].transpose(1, 2, 0)
-                            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                            cv2.imwrite(f"youtube/origin_{i}.png", img)
-
-
+                        save_as_grid("youtube/results.png", model, video)
                     total_loss = 0.0
                     n_forward = 0
 
+def evaluate(model: AutoencoderKLWLoss,
+         df: pd.DataFrame,
+         batch_size: int = 8,
+         eval_folder: str = "youtube/eval/"):
+
+    train_transforms = VT.Compose(
+        [
+            VT.Resize((256, 512), interpolation=VT.InterpolationMode.BICUBIC),
+            lambda x: 2 * (x / 255.0) - 1.0,
+        ]
+    )
+    frame_transform = lambda x: x
+    dataset = RandomDataset(
+        df,
+        clip_len=1,
+        video_transform=train_transforms,
+        frame_transform=frame_transform,
+    )
+    dataloader = DataLoader(dataset, batch_size=batch_size)
+
+    for data in tqdm(dataloader):
+        video = data["video"].squeeze(1)
+        video = video.cuda()
+        with torch.no_grad():
+            save_as_grid(f"{eval_folder}/results.png", model, video)
+        break
+
+
 
 if __name__ == "__main__":
-    df = pd.read_csv("youtube/dgx_videos.csv")
+
 
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-2-1",
@@ -220,9 +285,16 @@ if __name__ == "__main__":
 
     vae = AutoencoderKLWLoss(vae, kl_weight=1.0, pixelloss_weight=1.0).cuda()
 
+    os.makedirs("youtube/eval_sd_vae/", exist_ok=True)
+    df = pd.read_csv("youtube/dgx_videos.csv")
+    evaluate(vae, df, batch_size=4, eval_folder="youtube/eval_sd_vae/")
+    vae.load_state_dict(torch.load("youtube/vae_state_dict.pt"))
+    os.makedirs("youtube/eval_vae_ft/", exist_ok=True)
+    df = pd.read_csv("youtube/dgx_videos.csv")
+    evaluate(vae, df, batch_size=4, eval_folder="youtube/eval_vae_ft/")
 
-    train(vae, df, batch_size=4, gaccum=16, total_iter=50000)
+    # train(vae, df, batch_size=4, gaccum=16, total_iter=100000)
 
-    torch.save(vae.state_dict(), "youtube/vae_state_dict.pt")
+    # torch.save(vae.state_dict(), "youtube/vae_state_dict.pt")
 
 
