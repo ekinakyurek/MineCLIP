@@ -1,8 +1,14 @@
-import re
 from datetime import datetime
+import os
+import re
+
 import numpy as np
-from gpt.src.specification import EndPointSpec, OpenAIEndPointArgs, APIArgs
+
 from gpt.src.api import run_pipeline
+from gpt.src.specification import APIArgs
+from gpt.src.specification import EndPointSpec
+from gpt.src.specification import OpenAIEndPointArgs
+
 
 TIMEFINDER = re.compile(r"\d{2}:\d{2}:\d{2}.\d{3}")
 SUBFRAMETITLEFINDER = re.compile(r"<c>.*?</c>")
@@ -207,6 +213,7 @@ def merge_parts(outputs, parts: int = 4):
 
 if __name__ == "__main__":
     import glob
+
     import openai
 
     api_keys = os.environ.get("OPENAI_API_KEY").split(",")
@@ -217,6 +224,7 @@ if __name__ == "__main__":
         model: str = "gpt-3.5",
         max_input_tokens: int = 3000,
         parts: int = 4,
+        max_samples: int = 5,
     ):
         example_subtitle = compressed_format(
             open("samples/-xtrtbYT8wA.en.vtt", "r", encoding="utf-8").read()
@@ -232,13 +240,15 @@ if __name__ == "__main__":
         example_parts = partition(example_subtitle, example_parse, parts=parts)
 
         inputs = []
+        files = []
+
         for file in glob.glob(f"{vtt_folder}/*.en.vtt"):
-            if "xtrtbYT8wA" not in file:
+            if "xtrtbYT8wA" not in file:  # skip the example
                 query_subtitle = compressed_format(
                     open(file, "r", encoding="utf-8").read()
                 )
                 query_parts = partition_input(query_subtitle, parts=parts)
-
+                files.append(file)
                 for i, (example_input, example_output) in enumerate(example_parts):
                     inputs.append(
                         {
@@ -248,11 +258,11 @@ if __name__ == "__main__":
                         }
                     )
 
+                if len(inputs) >= max_samples:
+                    break
+
         pipeline = get_pipeline(model=model, max_input_tokens=max_input_tokens)
-
-        inputs = inputs[: parts * 2]
         outputs = await run_pipeline(inputs, pipeline, api_keys=api_keys)
-
         input_strings = [inp["query_subtitle"] for inp in inputs]
         inputs = merge_parts(input_strings, parts=parts)
         outputs = merge_parts(outputs, parts=parts)
@@ -262,9 +272,10 @@ if __name__ == "__main__":
     import asyncio
 
     # run the script
-    inputs, outputs = asyncio.run(convert(vtt_folder="samples",
-                                         model="gpt-3.5-turbo",
-                                         max_input_tokens=3000,
-                                         parts=4))
+    inputs, outputs = asyncio.run(
+        convert(
+            vtt_folder="samples", model="gpt-3.5-turbo", max_input_tokens=3000, parts=4
+        )
+    )
 
     breakpoint()
