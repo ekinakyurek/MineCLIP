@@ -12,8 +12,8 @@ ppo_args:
   gamma: 0.99
   epoch: 20
   step_per_epoch: 100000
-  step_per_collect: 1000
-  repeat_per_collect: 4
+  step_per_collect: 2000
+  repeat_per_collect: 5
   batch_size: 256
   hidden_size: 512
   training_num: 10

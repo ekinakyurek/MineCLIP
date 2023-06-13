@@ -431,7 +431,7 @@ class SelfBCEnv(MineCLIPEnv):
                     episode = Batch.stack(env_buffer)
                     obs = episode.obs_next[:-1]
                     act = episode.act[1:]
-                    rew = episode.rew[1:]
+                    rew = episode.rew[1:] * 5
                     episode = Batch(obs=obs, act=act, rew=rew, info=obs)
                     self.si_buffer[env_id].append(episode)
                     self.si_counter += len(env_buffer)
@@ -442,11 +442,11 @@ class SelfBCEnv(MineCLIPEnv):
                     act = episode.act[1:]
                     rew = episode.rew[1:]
                     episode = Batch(obs=obs, act=act, rew=rew, info=obs)
-                    mean_reward = rew.mean()
-                    si_rews = [ep.rew.mean() for ep in self.si_buffer[env_id]]
+                    sum_reward = rew.sum()
+                    si_rews = [ep.rew.sum() for ep in self.si_buffer[env_id]]
                     si_mean = np.mean(si_rews) if len(si_rews) > 0 else 0.0
                     si_std = np.std(si_rews) if len(si_rews) > 0 else 0.0
-                    if mean_reward > si_mean + 2 * si_std:
+                    if sum_reward > si_mean + 2 * si_std:
                         print("high reward episode will added to si_buffer")
                         print("env id: ", env_id)
                         self.si_buffer[env_id].append(episode)

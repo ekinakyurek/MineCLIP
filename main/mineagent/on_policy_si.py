@@ -248,7 +248,7 @@ def onpolicy_trainer(
                 # use numpy to sample
                 si_data = []
                 for k in range(len(si_buffer)):
-                    rewards = np.array([si_buffer[k][i].rew.mean().item() for i in range(len(si_buffer[k]))])
+                    rewards = np.array([si_buffer[k][i].rew.sum().item() for i in range(len(si_buffer[k]))])
                     # normalize rewards
                     rewards = rewards / rewards.sum()
                     # sample min_episode_num episodes
@@ -285,7 +285,7 @@ def onpolicy_trainer(
                 losses = si_policy.learn(
                     si_data,
                     batch_size=batch_size,
-                    repeat=4 # epochs
+                    repeat=10 # epochs
                 )
                 print("si losses\n", losses)
                 del si_optim
