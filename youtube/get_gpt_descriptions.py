@@ -1,3 +1,4 @@
+from typing import List
 from datetime import datetime
 import os
 import re
@@ -185,7 +186,7 @@ def get_pipeline(model: str = "gpt-3.5-turbo-16k", max_input_tokens: int = 3000)
             "You're a smart assistant. I want you to tell me what a gamer is"
             " performing in a minecraft video by reading its subtitles. To achieve"
             " this, you need to convert the subtitles to detailed descriptions by"
-            " writing the actions and the goals of the gamer. Please also mention the"
+            " inferring the actions and the goals of the gamer. Please also mention the"
             " names of used or crafted items if there are. \nHere is an example"
             " conversion:\nExample:\n\n\n--Subtitle--\n{input_subtitle}\n--Formatted"
             " Description--\n{output_subtitle}\n--DONE--\n\n\nHere is the query"
@@ -203,9 +204,8 @@ def get_pipeline(model: str = "gpt-3.5-turbo-16k", max_input_tokens: int = 3000)
     return [spec]
 
 
-def merge_parts(outputs, parts: int = 4):
+def merge_parts(outputs: List[str], parts: int = 4):
     response = []
-    print(outputs[0])
     for i in range(len(outputs) // parts):
         response.append("\n".join(outputs[i * parts : (i + 1) * parts]))
     return response
@@ -258,7 +258,7 @@ if __name__ == "__main__":
                         }
                     )
 
-                if len(inputs) >= max_samples:
+                if len(files) >= max_samples:
                     break
 
         pipeline = get_pipeline(model=model, max_input_tokens=max_input_tokens)
