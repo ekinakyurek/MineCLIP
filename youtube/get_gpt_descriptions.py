@@ -1,9 +1,12 @@
 from typing import List
+import asyncio
 from datetime import datetime
 import os
 import re
-
+import glob
+import openai
 import numpy as np
+import json
 
 from gpt.src.api import run_pipeline
 from gpt.src.specification import APIArgs
@@ -185,13 +188,13 @@ def get_pipeline(model: str = "gpt-3.5-turbo-16k", max_input_tokens: int = 3000)
         template=(
             "You're a smart assistant. I want you to tell me what a gamer is"
             " performing in a minecraft video by reading its subtitles. To achieve"
-            " this, you need to convert the subtitles to detailed descriptions by"
+            " this, you need to convert the subtitles to detailed annotations by"
             " inferring the actions and the goals of the gamer. Please also mention the"
             " names of used or crafted items if there are. \nHere is an example"
-            " conversion:\nExample:\n\n\n--Subtitle--\n{input_subtitle}\n--Formatted"
-            " Description--\n{output_subtitle}\n--DONE--\n\n\nHere is the query"
-            " subtitle:\nQuery:\n\\n\n--Subtitle--\n{query_subtitle}\n--Formatted"
-            " Description--\n"
+            " of annotation that I want:\nExample:\n\n\n--Subtitle--\n{input_subtitle}\n--Formatted"
+            " Annotation--\n{output_subtitle}\n--DONE--\n\n\nHere is the query"
+            " subtitle that you need to convert:\nQuery:\n\\n\n--Subtitle--\n{query_subtitle}\n--Formatted"
+            " Annotation--\n"
         ),
         args=APIArgs(
             OpenAIEndPointArgs(model=model, stop=["--DONE--"]),
@@ -212,9 +215,7 @@ def merge_parts(outputs: List[str], parts: int = 4):
 
 
 if __name__ == "__main__":
-    import glob
 
-    import openai
 
     api_keys = os.environ.get("OPENAI_API_KEY").split(",")
     openai.organization = None
@@ -269,13 +270,21 @@ if __name__ == "__main__":
 
         return inputs, outputs
 
-    import asyncio
+
 
     # run the script
+
+    MODEL = "gpt-3.5-turbo"
+    MAX_INPUT_TOKENS = 3000
+    PARTS = 4
+
     inputs, outputs = asyncio.run(
         convert(
-            vtt_folder="samples", model="gpt-3.5-turbo", max_input_tokens=3000, parts=4
+            vtt_folder="samples", model=MODEL, max_input_tokens=MAX_INPUT_TOKENS, parts=PARTS
         )
     )
 
-    breakpoint()
+    # save the results
+    with open(f"get_annotations_{MODEL}_{MAX_INPUT_TOKENS}_{PARTS}.json", "w", encoding="utf-8") as f:
+        json.dump({"inputs": inputs, "outputs": outputs}, f, indent=4)
+
