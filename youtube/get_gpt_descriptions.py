@@ -209,7 +209,7 @@ if __name__ == "__main__":
     import glob
     import openai
 
-    api_keys = ["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"]
+    api_keys = os.environ.get("OPENAI_API_KEY").split(",")
     openai.organization = None
 
     async def convert(
