@@ -274,9 +274,9 @@ if __name__ == "__main__":
 
     # run the script
 
-    MODEL = "gpt-3.5-turbo"
-    MAX_INPUT_TOKENS = 3000
-    PARTS = 4
+    MODEL = "gpt-3.5-turbo-16k"
+    MAX_INPUT_TOKENS = 13000
+    PARTS = 1
 
     inputs, outputs = asyncio.run(
         convert(
