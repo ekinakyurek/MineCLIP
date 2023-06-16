@@ -21,21 +21,26 @@ class VideoFramesIterator(torch.utils.data.IterableDataset):
         annotations: pd.DataFrame,
         frame_transform=None,
         nframes_per_iteration: int = 29,
+        nframes_per_video: int = 100,
         seed: int = 42,
     ):
         super(VideoFramesIterator).__init__()
 
         self.annotations = annotations
         self.nframes_per_iteration = nframes_per_iteration
+        self.nframes_per_video = nframes_per_video
         self.frame_transform = frame_transform
         self.epoch_size = int(self.annotations.nbframes.sum() / nframes_per_iteration)
+        # self.file_boundaries = self.annotations.nbframes.cumsum().values
         self.seed = seed
         self.nframes_per_iteration = nframes_per_iteration
         self.rng = np.random.default_rng(seed)
 
     def __iter__(self):
-        for i in range(self.epoch_size):
+        for i in range(len(self.annotations)):
             # Get random sample
+            # find which file we are at
+            # file_idx = np.searchsorted(self.file_boundaries, i)
             sample = self.annotations.iloc[i]
             path = "youtube/samples/" + sample["file"]
 
@@ -44,28 +49,56 @@ class VideoFramesIterator(torch.utils.data.IterableDataset):
                 continue
 
             vr = VideoReader(path, ctx=cpu(0), width=224, height=224)
-
+            current_frame = 0
             start_frame = 0
             video_frames = []
+            skip_frames = (self.nframes_per_iteration // self.nframes_per_video) - 1
+            if skip_frames > 0:
+                while True:
+                    try:
+                        frame = vr.next()
+                    except StopIteration:
+                        break
 
-            for frame, data in enumerate(vr):
-                data = data.permute(2, 0, 1)
+                    current_frame += 1
 
-                if self.frame_transform is not None:
-                    data = self.frame_transform(data)
+                    frame = frame.permute(2, 0, 1)
+                    if self.frame_transform is not None:
+                        frame = self.frame_transform(frame)
+                    video_frames.append(frame)
 
-                video_frames.append(data)
+                    vr.skip_frames(skip_frames)
+                    current_frame += skip_frames
 
-                if frame == start_frame + self.nframes_per_iteration:
-                    out = {
-                        "path": path,
-                        "video": video_frames,
-                        "start": start_frame,
-                        "end": frame,
-                    }
-                    yield out
-                    start_frame = frame + 1
-                    video_frames = []
+                    if len(video_frames) == self.nframes_per_video:
+                        out = {
+                            "path": path,
+                            "video": video_frames,
+                            "start": start_frame,
+                            "end": current_frame,
+                        }
+                        yield out
+                        start_frame  = current_frame
+                        video_frames = []
+            else:
+                for frame, data in enumerate(vr):
+                    data = data.permute(2, 0, 1)
+
+                    if self.frame_transform is not None:
+                        data = self.frame_transform(data)
+
+                    video_frames.append(data)
+
+                    if frame == start_frame + self.nframes_per_iteration:
+                        out = {
+                            "path": path,
+                            "video": video_frames,
+                            "start": start_frame,
+                            "end": frame,
+                        }
+                        yield out
+                        start_frame = frame + 1
+                        video_frames = []
 
 
 def video_transform(video, num_frames=100):
@@ -77,7 +110,7 @@ def video_transform(video, num_frames=100):
     return video
 
 
-def run(projection_path: str, model_name: str, question: str):
+def run(projection_path: str, model_name: str, question: str, nframes_per_iterations: int):
     df = pd.read_csv("youtube/dgx_videos.csv")
 
     # only include videos in sample directory for testing
@@ -86,7 +119,7 @@ def run(projection_path: str, model_name: str, question: str):
     df = df[df["file"].isin(samples)]
     ###
 
-    dataset = VideoFramesIterator(df)
+    dataset = VideoFramesIterator(df, nframes_per_iteration=nframes_per_iterations)
     dataloader = DataLoader(dataset, batch_size=1)
 
     model, vision_tower, tokenizer, image_processor, video_token_len = initialize_model(
@@ -115,7 +148,7 @@ def run(projection_path: str, model_name: str, question: str):
         )
         # print("time to run chatgpt: ", time.time() - timer)
         # append to related annotation file
-        with open(path.replace("mp4", "chatgpt"), "a+", encoding="utf-8") as handle:
+        with open(path.replace("mp4", "chatgpt_1000"), "a+", encoding="utf-8") as handle:
             annotation = f"{start_frame} - {end_frame}\n{output}\n"
             handle.write(annotation)
 
@@ -131,5 +164,6 @@ if __name__ == "__main__":
     PROJECTION_PATH = "vgpt/weights/video_chatgpt-7B.bin"
     MODEL_NAME = "vgpt/LLaVA-Lightning-7B-v1-1"
     QUESTION = "What is the gamer doing in this minecraft scene?"
+    NFRAMES_PER_ITERATION = 1000
 
-    run(PROJECTION_PATH, MODEL_NAME, QUESTION)
+    run(PROJECTION_PATH, MODEL_NAME, QUESTION, NFRAMES_PER_ITERATION)
