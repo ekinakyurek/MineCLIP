@@ -1,16 +1,17 @@
-import os
-import torch
-import numpy as np
 import glob
+import os
 import sys
-from torchvision.transforms.functional import to_pil_image
-from torch.utils.data import DataLoader
-import pandas as pd
+import time
 
 import decord
-from decord import VideoReader
 from decord import cpu
-import time
+from decord import VideoReader
+import numpy as np
+import pandas as pd
+import torch
+from torch.utils.data import DataLoader
+from torchvision.transforms.functional import to_pil_image
+
 
 decord.bridge.set_bridge("torch")
 
@@ -78,7 +79,7 @@ class VideoFramesIterator(torch.utils.data.IterableDataset):
                             "end": current_frame,
                         }
                         yield out
-                        start_frame  = current_frame
+                        start_frame = current_frame
                         video_frames = []
             else:
                 for frame, data in enumerate(vr):
@@ -110,7 +111,13 @@ def video_transform(video, num_frames=100):
     return video
 
 
-def run(projection_path: str, model_name: str, question: str, nframes_per_iterations: int):
+def run(
+    projection_path: str,
+    model_name: str,
+    question: str,
+    nframes_per_iteration: int,
+    exp_folder: str,
+):
     df = pd.read_csv("youtube/dgx_videos.csv")
 
     # only include videos in sample directory for testing
@@ -119,7 +126,7 @@ def run(projection_path: str, model_name: str, question: str, nframes_per_iterat
     df = df[df["file"].isin(samples)]
     ###
 
-    dataset = VideoFramesIterator(df, nframes_per_iteration=nframes_per_iterations)
+    dataset = VideoFramesIterator(df, nframes_per_iteration=nframes_per_iteration)
     dataloader = DataLoader(dataset, batch_size=1)
 
     model, vision_tower, tokenizer, image_processor, video_token_len = initialize_model(
@@ -148,7 +155,11 @@ def run(projection_path: str, model_name: str, question: str, nframes_per_iterat
         )
         # print("time to run chatgpt: ", time.time() - timer)
         # append to related annotation file
-        with open(path.replace("mp4", "chatgpt_1000"), "a+", encoding="utf-8") as handle:
+        filename = path.split("/")[-1].replace(
+            "mp4", f"chatgpt_{nframes_per_iteration}"
+        )
+        file = os.path.join(exp_folder, filename)
+        with open(file, "a+", encoding="utf-8") as handle:
             annotation = f"{start_frame} - {end_frame}\n{output}\n"
             handle.write(annotation)
 
@@ -157,13 +168,49 @@ def run(projection_path: str, model_name: str, question: str, nframes_per_iterat
 
 if __name__ == "__main__":
     sys.path.append("vgpt")
-    from video_chatgpt.eval.model_utils import initialize_model, get_seq_frames
+    import argparse
+
+    from video_chatgpt.eval.model_utils import get_seq_frames
+    from video_chatgpt.eval.model_utils import initialize_model
     from video_chatgpt.inference import video_chatgpt_infer
 
-    # FLAGS
-    PROJECTION_PATH = "vgpt/weights/video_chatgpt-7B.bin"
-    MODEL_NAME = "vgpt/LLaVA-Lightning-7B-v1-1"
-    QUESTION = "What is the gamer doing in this minecraft scene?"
-    NFRAMES_PER_ITERATION = 1000
+    parser = argparse.ArgumentParser(description="Get GPT annotations for videos")
+    parser.add_argument(
+        "--projection_path",
+        type=str,
+        default="vgpt/weights/video_chatgpt-7B.bin",
+        help="video chatgpt weights",
+    )
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default="vgpt/LLaVA-Lightning-7B-v1-1",
+        help="video chatgpt model name",
+    )
+    parser.add_argument(
+        "--question",
+        type=str,
+        default="What is the gamer doing in this minecraft scene?",
+        help="question to ask chatgpt",
+    )
+    parser.add_argument(
+        "--nframes_per_iteration",
+        type=int,
+        default=1000,
+        help="number of frames to process per iteration",
+    )
 
-    run(PROJECTION_PATH, MODEL_NAME, QUESTION, NFRAMES_PER_ITERATION)
+    args = parser.parse_args()
+
+    question_hash = args.question.replace(" ", "_").replace("?", "")
+
+    exp_folder = f"youtube/samples/{question_hash}/"
+    os.makedirs(exp_folder, exist_ok=True)
+
+    run(
+        args.projection_path,
+        args.model_name,
+        args.question,
+        args.nframes_per_iteration,
+        exp_folder,
+    )
