@@ -1,18 +1,17 @@
 import glob
 import os
 import sys
-import time
-
-import decord
-from decord import cpu
-from decord import VideoReader
 import numpy as np
-import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 from torchvision.transforms.functional import to_pil_image
 
+import pandas as pd
 
+
+import decord
+from decord import cpu
+from decord import VideoReader
 decord.bridge.set_bridge("torch")
 
 
@@ -117,6 +116,8 @@ def run(
     question: str,
     nframes_per_iteration: int,
     exp_folder: str,
+    temp: float = 0.2,
+    max_new_tokens: int = 256,
 ):
     df = pd.read_csv("youtube/dgx_videos.csv")
 
@@ -126,6 +127,8 @@ def run(
     df = df[df["file"].isin(samples)]
     ###
 
+    print("Dataset loaded")
+
     dataset = VideoFramesIterator(df, nframes_per_iteration=nframes_per_iteration)
     dataloader = DataLoader(dataset, batch_size=1)
 
@@ -133,7 +136,6 @@ def run(
         model_name, projection_path
     )
 
-    timer = 0.0
     for batch in dataloader:
         path = str(batch["path"][0])
         video_frames = video_transform(batch["video"])
@@ -152,13 +154,15 @@ def run(
             tokenizer,
             image_processor,
             video_token_len,
+            temp=temp,
+            max_new_tokens=max_new_tokens,
         )
         # print("time to run chatgpt: ", time.time() - timer)
         # append to related annotation file
         filename = path.split("/")[-1].replace(
             "mp4", f"chatgpt_{nframes_per_iteration}"
         )
-        file = os.path.join(exp_folder, filename)
+        file = os.path.join(exp_folder, filename) + ".txt"
         with open(file, "a+", encoding="utf-8") as handle:
             annotation = f"{start_frame} - {end_frame}\n{output}\n"
             handle.write(annotation)
@@ -167,6 +171,7 @@ def run(
 
 
 if __name__ == "__main__":
+    print("Starting the script")
     sys.path.append("vgpt")
     import argparse
 
@@ -174,6 +179,7 @@ if __name__ == "__main__":
     from video_chatgpt.eval.model_utils import initialize_model
     from video_chatgpt.inference import video_chatgpt_infer
 
+    print("Adding parser")
     parser = argparse.ArgumentParser(description="Get GPT annotations for videos")
     parser.add_argument(
         "--projection_path",
@@ -199,13 +205,27 @@ if __name__ == "__main__":
         default=1000,
         help="number of frames to process per iteration",
     )
+    parser.add_argument(
+        "--temp",
+        type=float,
+        default=0.2,
+        help="temperature for chatgpt",
+    )
 
+    parser.add_argument(
+        "--max_new_tokens",
+        type=int,
+        default=256,
+        help="max new tokens for chatgpt",
+    )
     args = parser.parse_args()
+    print("Args parsed")
 
     question_hash = args.question.replace(" ", "_").replace("?", "")
-
+    question_hast = question_hash[:64]
     exp_folder = f"youtube/samples/{question_hash}/"
     os.makedirs(exp_folder, exist_ok=True)
+    print("folder created")
 
     run(
         args.projection_path,
@@ -213,4 +233,6 @@ if __name__ == "__main__":
         args.question,
         args.nframes_per_iteration,
         exp_folder,
+        temp=args.temp,
+        max_new_tokens=args.max_new_tokens,
     )

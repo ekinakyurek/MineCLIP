@@ -1,3 +1,8 @@
 [submodule "gpt"]
 	path = gpt
 	url = https://github.com/ekinakyurek/mylmapis
+[submodule "nanoGPT"]
+        path = mmgpt/nanoGPT
+	url = https://github.com/ekinakyurek/nanoGPT
+	branch = training
+		
